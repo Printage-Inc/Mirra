@@ -6,10 +6,6 @@
     <string>app.mirra.device-watcher</string>
     <key>BundleProgram</key>
     <string>Contents/MacOS/MirraDeviceWatcher</string>
-    <key>AssociatedBundleIdentifiers</key>
-    <array>
-        <string>app.mirra.mac</string>
-    </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

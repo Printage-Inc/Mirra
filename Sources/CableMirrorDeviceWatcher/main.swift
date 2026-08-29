@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import IOKit
 
@@ -104,7 +105,21 @@ final class MobileDeviceWatcher {
     }
 
     private func enclosingApplicationURL() -> URL? {
-        var url = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        // launchd may pass BundleProgram as a relative argv[0] (for example,
+        // "Contents/MacOS/MirraDeviceWatcher"). _NSGetExecutablePath returns
+        // the actual absolute path regardless of how launchd invoked us.
+        var bufferSize: UInt32 = 0
+        _ = _NSGetExecutablePath(nil, &bufferSize)
+        var buffer = [CChar](repeating: 0, count: Int(bufferSize))
+        guard _NSGetExecutablePath(&buffer, &bufferSize) == 0 else {
+            return nil
+        }
+
+        let executablePath = buffer.withUnsafeBufferPointer { pointer in
+            String(cString: pointer.baseAddress!)
+        }
+        var url = URL(fileURLWithPath: executablePath)
+            .resolvingSymlinksInPath()
         url.deleteLastPathComponent() // MacOS
         url.deleteLastPathComponent() // Contents
         url.deleteLastPathComponent() // Mirra.app

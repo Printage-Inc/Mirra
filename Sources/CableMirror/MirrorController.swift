@@ -5,9 +5,12 @@ import CoreAudio
 import CoreMedia
 import CoreMediaIO
 import Foundation
+import OSLog
 import ServiceManagement
 
 final class MirrorController: ObservableObject {
+    private static let logger = Logger(subsystem: "app.mirra.mac", category: "AutomaticLaunch")
+
     struct DeviceOption: Identifiable, Hashable {
         let id: String
         let name: String
@@ -440,15 +443,26 @@ final class MirrorController: ObservableObject {
 
         let service = SMAppService.agent(plistName: Self.deviceWatcherPlistName)
         do {
-            autoLaunchServiceStatus = Self.serviceStatusName(service.status)
-            if service.status == .notRegistered {
+            let initialStatus = service.status
+            autoLaunchServiceStatus = Self.serviceStatusName(initialStatus)
+            Self.logger.info("USB watcher initial status: \(self.autoLaunchServiceStatus, privacy: .public)")
+
+            // Apple's reference implementation registers the service directly.
+            // Some macOS releases report .notFound for an embedded agent that
+            // has never been registered. Treat it as an initial state and let
+            // register() return the authoritative result.
+            if initialStatus == .notRegistered || initialStatus == .notFound {
                 try service.register()
             }
-            autoLaunchServiceStatus = Self.serviceStatusName(service.status)
-            autoLaunchState = Self.autoLaunchState(for: service.status)
+
+            let finalStatus = service.status
+            autoLaunchServiceStatus = Self.serviceStatusName(finalStatus)
+            autoLaunchState = Self.autoLaunchState(for: finalStatus)
+            Self.logger.info("USB watcher final status: \(self.autoLaunchServiceStatus, privacy: .public)")
         } catch {
-            autoLaunchServiceStatus = "registrationError"
+            autoLaunchServiceStatus = "registrationError: \(error.localizedDescription)"
             autoLaunchState = .failed(error.localizedDescription)
+            Self.logger.error("USB watcher registration failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
