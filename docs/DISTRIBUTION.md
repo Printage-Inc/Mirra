@@ -23,7 +23,7 @@ Mirra is distributed outside the Mac App Store as a Developer ID signed and Appl
 ## Release
 
 ```sh
-cd /Users/vivi/code/NuStack/CableMirror
+cd /Users/vivi/code/NuStack/Mirra
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   CLANG_MODULE_CACHE_PATH="$PWD/.build/ModuleCache" \
   swift test --disable-sandbox

@@ -27,7 +27,7 @@ Mirra does not send Mac mouse or keyboard events to a physical iPhone. Apple doe
 Full Xcode is required. The scripts explicitly use the standard Xcode install even if `xcode-select` currently points at Command Line Tools.
 
 ```sh
-cd /Users/vivi/code/NuStack/CableMirror
+cd /Users/vivi/code/NuStack/Mirra
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox
 ./scripts/build-app.sh
 ```
