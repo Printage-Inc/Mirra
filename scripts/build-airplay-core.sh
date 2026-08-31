@@ -14,10 +14,10 @@ case "${ARCH}" in
     *) print "Unsupported AirPlay architecture: ${ARCH}"; exit 64 ;;
 esac
 
-for COMMAND_NAME in cmake make autoconf automake glibtoolize pkg-config perl patch; do
+for COMMAND_NAME in cmake make autoconf automake glibtoolize pkg-config perl patch rg; do
     if ! command -v "${COMMAND_NAME}" >/dev/null 2>&1; then
         print "Missing build dependency: ${COMMAND_NAME}"
-        print "Install build tools with: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cmake autoconf automake libtool pkg-config"
+        print "Install build tools with: HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cmake autoconf automake libtool pkg-config ripgrep"
         exit 69
     fi
 done
@@ -73,6 +73,7 @@ if [[ ! -f "${PLIST_PREFIX}/lib/libplist-2.0.a" ]]; then
     if [[ -e "${PLIST_STAGE}/.git" ]]; then
         mv "${PLIST_STAGE}/.git" "${WORK_ROOT}/libplist-gitlink"
     fi
+    print -n "2.7.0" > "${PLIST_STAGE}/.tarball-version"
     (
         cd "${PLIST_STAGE}"
         export CC="${CLANG_BIN} -arch ${ARCH} -isysroot ${SDK_PATH}"
