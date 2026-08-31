@@ -25,6 +25,28 @@ final class MirrorController: ObservableObject {
         }
     }
 
+    enum ConnectionPreference: String, CaseIterable, Identifiable {
+        case automatic
+        case usb
+        case wireless
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .automatic: return "自動"
+            case .usb: return "USB"
+            case .wireless: return "無線"
+            }
+        }
+    }
+
+    enum ActiveSource: String {
+        case none
+        case usb
+        case airPlay
+    }
+
     enum State: Equatable {
         case idle
         case requestingPermission
@@ -43,7 +65,7 @@ final class MirrorController: ObservableObject {
             case .permissionDenied:
                 return "需要相機權限"
             case .waitingForDevice:
-                return "搜尋 iPhone／iPad（USB）"
+                return "搜尋 iPhone／iPad（USB／無線）"
             case .connecting(let name):
                 return "正在連接 \(name)"
             case .streaming(let name):
@@ -78,10 +100,16 @@ final class MirrorController: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var autoLaunchState: AutoLaunchState = .checking
     @Published private(set) var videoAspectRatio: CGFloat?
+    @Published private(set) var activeSource: ActiveSource = .none
+    @Published private(set) var airPlayVerificationCode: String?
     @Published var selectedDeviceID: String?
     @Published var presentationMode = true
+    @Published var connectionPreference: ConnectionPreference = .automatic {
+        didSet { applyConnectionPreference() }
+    }
 
     let captureSession: AVCaptureSession
+    let airPlayReceiver: AirPlayReceiverController
 
     private let coreMediaIOPreparation: CoreMediaIOPreparation
     private let sessionQueue = DispatchQueue(label: "app.mirra.capture-session")
@@ -97,12 +125,28 @@ final class MirrorController: ObservableObject {
         // AVFoundation object initializes the capture-device subsystem.
         coreMediaIOPreparation = Self.prepareScreenCaptureDevices()
         captureSession = AVCaptureSession()
+        airPlayReceiver = AirPlayReceiverController()
         installDeviceObservers()
+        airPlayReceiver.onFirstFrame = { [weak self] in
+            self?.handleAirPlayFirstFrame()
+        }
+        airPlayReceiver.onConnectionLost = { [weak self] in
+            self?.handleAirPlayConnectionLost()
+        }
+        airPlayReceiver.onVerificationCode = { [weak self] code in
+            self?.airPlayVerificationCode = code
+            self?.activateApplicationWindow()
+        }
+        airPlayReceiver.renderer.onAspectRatioChange = { [weak self] aspectRatio in
+            guard self?.activeSource == .airPlay else { return }
+            self?.updateVideoAspectRatio(aspectRatio)
+        }
     }
 
     deinit {
         devicePollTimer?.invalidate()
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
+        airPlayReceiver.stop()
         captureSession.stopRunning()
     }
 
@@ -110,6 +154,7 @@ final class MirrorController: ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
         configureAutomaticLaunch()
+        airPlayReceiver.start()
 
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -124,12 +169,19 @@ final class MirrorController: ObservableObject {
                         self.startDevicePolling()
                         self.refreshDevices()
                     } else {
-                        self.state = .permissionDenied
+                        self.state = self.connectionPreference == .usb
+                            ? .permissionDenied
+                            : .waitingForDevice
                     }
                 }
             }
         case .denied, .restricted:
-            state = .permissionDenied
+            // Camera permission is required only for Apple's wired
+            // CoreMediaIO source. Mirra's own AirPlay receiver continues to
+            // work when the user has denied that independent permission.
+            state = connectionPreference == .usb
+                ? .permissionDenied
+                : .waitingForDevice
         @unknown default:
             state = .failed("無法判斷相機權限")
         }
@@ -187,8 +239,15 @@ final class MirrorController: ObservableObject {
             if captureSession.isRunning || activeInput != nil {
                 stopCapture()
             }
-            videoAspectRatio = nil
-            state = .waitingForDevice
+            if airPlayReceiver.hasReceivedFrame,
+               connectionPreference != .usb {
+                activeSource = .airPlay
+                state = .streaming("iPhone／iPad · AirPlay")
+            } else {
+                activeSource = .none
+                videoAspectRatio = nil
+                state = .waitingForDevice
+            }
             return
         }
 
@@ -266,9 +325,18 @@ final class MirrorController: ObservableObject {
             "generatedAt": ISO8601DateFormatter().string(from: Date()),
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
             "architecture": Self.architectureName,
-            "mode": "wiredOnly",
+            "mode": "usbAndAirPlay",
+            "activeSource": activeSource.rawValue,
+            "connectionPreference": connectionPreference.rawValue,
             "cameraAuthorization": authorization,
             "captureState": state.label,
+            "airPlay": [
+                "receiverName": airPlayReceiver.receiverName,
+                "state": airPlayReceiver.state.diagnosticValue,
+                "hasReceivedFrame": airPlayReceiver.hasReceivedFrame,
+                // Never copy the secret itself into a support report.
+                "verificationPending": airPlayVerificationCode != nil
+            ],
             "automaticLaunch": [
                 "state": autoLaunchState.diagnosticValue,
                 "serviceStatus": autoLaunchServiceStatus
@@ -295,6 +363,76 @@ final class MirrorController: ObservableObject {
         videoAspectRatio = aspectRatio
     }
 
+    var isShowingUSBPreview: Bool {
+        activeSource == .usb && captureSession.isRunning
+    }
+
+    var isShowingAirPlayPreview: Bool {
+        activeSource == .airPlay && airPlayReceiver.hasReceivedFrame
+    }
+
+    private func handleAirPlayFirstFrame() {
+        airPlayVerificationCode = nil
+        guard connectionPreference != .usb else { return }
+        if connectionPreference == .wireless || !captureSession.isRunning {
+            activeSource = .airPlay
+            state = .streaming("iPhone／iPad · AirPlay")
+            activateApplicationWindow()
+        }
+    }
+
+    private func handleAirPlayConnectionLost() {
+        airPlayVerificationCode = nil
+        guard activeSource == .airPlay else { return }
+        if connectionPreference != .wireless,
+           captureSession.isRunning,
+           let activeInput {
+            activeSource = .usb
+            state = .streaming("\(activeInput.device.localizedName) · USB")
+        } else {
+            activeSource = .none
+            videoAspectRatio = nil
+            state = .waitingForDevice
+        }
+    }
+
+    private func applyConnectionPreference() {
+        switch connectionPreference {
+        case .automatic:
+            if captureSession.isRunning, let activeInput {
+                activeSource = .usb
+                state = .streaming("\(activeInput.device.localizedName) · USB")
+            } else if airPlayReceiver.hasReceivedFrame {
+                activeSource = .airPlay
+                state = .streaming("iPhone／iPad · AirPlay")
+            } else {
+                activeSource = .none
+                state = .waitingForDevice
+            }
+        case .usb:
+            guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+                activeSource = .none
+                state = .permissionDenied
+                return
+            }
+            if captureSession.isRunning, let activeInput {
+                activeSource = .usb
+                state = .streaming("\(activeInput.device.localizedName) · USB")
+            } else {
+                activeSource = .none
+                state = .waitingForDevice
+            }
+        case .wireless:
+            if airPlayReceiver.hasReceivedFrame {
+                activeSource = .airPlay
+                state = .streaming("iPhone／iPad · AirPlay")
+            } else {
+                activeSource = .none
+                state = .waitingForDevice
+            }
+        }
+    }
+
     func openLoginItemsSettings() {
         if #available(macOS 13.0, *) {
             SMAppService.openSystemSettingsLoginItems()
@@ -308,7 +446,9 @@ final class MirrorController: ObservableObject {
         }
 
         let displayName = "\(device.localizedName) · USB"
-        state = .connecting(displayName)
+        if connectionPreference != .wireless {
+            state = .connecting(displayName)
+        }
 
         sessionQueue.async { [weak self] in
             guard let self else { return }
@@ -348,13 +488,21 @@ final class MirrorController: ObservableObject {
 
                 DispatchQueue.main.async {
                     if dimensions.width > 0, dimensions.height > 0 {
-                        self.updateVideoAspectRatio(dimensions.width / dimensions.height)
+                        if self.connectionPreference != .wireless {
+                            self.updateVideoAspectRatio(dimensions.width / dimensions.height)
+                        }
                     }
-                    self.state = .streaming(displayName)
+                    if self.connectionPreference != .wireless {
+                        self.activeSource = .usb
+                        self.state = .streaming(displayName)
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.state = .failed("連接失敗：\(error.localizedDescription)")
+                    if self.activeSource != .airPlay {
+                        self.activeSource = .none
+                        self.state = .failed("連接失敗：\(error.localizedDescription)")
+                    }
                 }
             }
         }

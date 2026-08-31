@@ -1,0 +1,113 @@
+diff --git a/Sources/AirPlay/AirPlayEngine.h b/Sources/AirPlay/AirPlayEngine.h
+index e1dcef5..5ecba46 100644
+--- a/Sources/AirPlay/AirPlayEngine.h
++++ b/Sources/AirPlay/AirPlayEngine.h
+@@ -26,6 +26,10 @@ NS_ASSUME_NONNULL_BEGIN
+ /// showing a live link forever.  Hop to main for any UI state.
+ @property (nonatomic, copy, nullable) void (^onConnectionLost)(void);
+ 
++/// Called whenever AirPlay requires the sender to enter a fresh four-digit
++/// verification code. The callback runs on a UxPlay network thread.
++@property (nonatomic, copy, nullable) void (^onVerificationCode)(NSString *code);
++
+ - (void)start;
+ - (void)stop;
+ 
+diff --git a/Sources/AirPlay/AirPlayEngine.mm b/Sources/AirPlay/AirPlayEngine.mm
+index d9decc7..291d064 100644
+--- a/Sources/AirPlay/AirPlayEngine.mm
++++ b/Sources/AirPlay/AirPlayEngine.mm
+@@ -141,6 +141,7 @@ void setFrameCallback(FrameCallback cb)
+   }
+ 
+   using ConnectionLostCallback = void (^)();
++  using VerificationCodeCallback = void (^)(NSString *);
+ 
+   void setConnectionLostCallback(ConnectionLostCallback cb)
+   {
+@@ -148,6 +149,23 @@ void setConnectionLostCallback(ConnectionLostCallback cb)
+     connLostCb_ = cb;
+   }
+ 
++  void setVerificationCodeCallback(VerificationCodeCallback cb)
++  {
++    std::lock_guard<std::mutex> lk(cbMutex_);
++    verificationCodeCb_ = cb;
++  }
++
++  void notifyVerificationCode(const char *pin)
++  {
++    VerificationCodeCallback cb;
++    {
++      std::lock_guard<std::mutex> lk(cbMutex_);
++      cb = verificationCodeCb_;
++    }
++    if (cb && pin)
++      cb([NSString stringWithUTF8String:pin]);
++  }
++
+   // Invoke the "connection lost" block (if any) OUTSIDE the lock — it hops to the Swift/main
+   // side, which must never run while we hold cbMutex_.  Fires on a UxPlay network thread.
+   void notifyConnectionLost()
+@@ -422,14 +440,18 @@ static void conn_feedback(void * /*cls*/) {}            // client heartbeat —
+ 
+   static double audio_set_client_volume(void * /*cls*/) { return 0.0; }  // 0 dB = full volume
+ 
+-  // Access-control / pairing stubs — no password, no PIN registration: admit everyone.
++  // Use AirPlay's onscreen verification-code pairing, without a second digest password.
+   static void report_client_request(void * /*cls*/, char * /*deviceid*/,
+                                     char * /*model*/, char * /*name*/, bool *admit)
+   {
+     if (admit) *admit = true;
+   }
+   static const char *passwd(void * /*cls*/, int *len) { if (len) *len = 0; return nullptr; }
+-  static bool check_register(void * /*cls*/, const char * /*pk_str*/) { return false; }
++  static void display_pin(void *cls, char *pin)
++  {
++    static_cast<AirPlayEngineImpl *>(cls)->notifyVerificationCode(pin);
++  }
++  static bool check_register(void * /*cls*/, const char * /*pk_str*/) { return true; }
+   static void register_client(void * /*cls*/, const char * /*device_id*/,
+                               const char * /*pk_str*/, const char * /*name*/) {}
+ 
+@@ -547,9 +569,9 @@ int startServerLocked(const std::string &name)
+ 
+     // 1) dnssd first — raop_set_dnssd below requires it non-null.
+     int err = 0;
+-    // pin_pw = 0: no client access control (open receiver).
++    // pin_pw = 1: use the native AirPlay onscreen verification-code flow.
+     dnssd_ = dnssd_init(name.c_str(), (int)strlen(name.c_str()),
+-                        hwAddr.data(), (int)hwAddr.size(), 0, &err);
++                        hwAddr.data(), (int)hwAddr.size(), 1, &err);
+     if (err || !dnssd_)
+     {
+       os_log_error(ap_log(), "dnssd_init failed: %d", err);
+@@ -590,6 +612,7 @@ int startServerLocked(const std::string &name)
+     cbs.audio_set_client_volume = audio_set_client_volume;
+     cbs.report_client_request = report_client_request;
+     cbs.passwd = passwd;
++    cbs.display_pin = display_pin;
+     cbs.check_register = check_register;
+     cbs.register_client = register_client;
+ 
+@@ -721,6 +744,7 @@ void stopServerLocked()
+   // Frame delivery.
+   FrameCallback frameCb_ = nil;
+   ConnectionLostCallback connLostCb_ = nil;   // fired when the mirror session drops (#12)
++  VerificationCodeCallback verificationCodeCb_ = nil;
+   std::mutex cbMutex_;
+ 
+   // Decoupled-decode queue.  Depth 32 ABSORBS network bursts (Wi-Fi jitter hands
+@@ -786,6 +810,12 @@ - (void)setOnConnectionLost:(void (^)(void))onConnectionLost
+   _impl->setConnectionLostCallback(_onConnectionLost);
+ }
+ 
++- (void)setOnVerificationCode:(void (^)(NSString *))onVerificationCode
++{
++  _onVerificationCode = [onVerificationCode copy];
++  _impl->setVerificationCodeCallback(_onVerificationCode);
++}
++
+ - (void)start
+ {
+   _impl->start();

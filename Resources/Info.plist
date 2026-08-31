@@ -21,13 +21,20 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.2</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
-    <string>18</string>
+    <string>22</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSCameraUsageDescription</key>
     <string>Mirra 需要讀取 iPhone 或 iPad 螢幕影像，讓你在 Mac 與視訊會議中分享。</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Mirra 需要使用本機網路，讓同一個 Wi-Fi 上的 iPhone 或 iPad 能透過 AirPlay 將螢幕傳送到這台 Mac。影像不會上傳到網際網路。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_airplay._tcp</string>
+        <string>_raop._tcp</string>
+    </array>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>

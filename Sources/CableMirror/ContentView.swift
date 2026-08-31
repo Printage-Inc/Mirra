@@ -19,7 +19,10 @@ struct ContentView: View {
                     session: mirror.captureSession,
                     onVideoAspectRatioChange: mirror.updateVideoAspectRatio
                 )
-                .opacity(isShowingPreview ? 1 : 0)
+                .opacity(mirror.isShowingUSBPreview ? 1 : 0)
+
+                AirPlayPreviewView(renderer: mirror.airPlayReceiver.renderer)
+                    .opacity(mirror.isShowingAirPlayPreview ? 1 : 0)
 
                 if !isShowingPreview {
                     emptyState
@@ -73,6 +76,15 @@ struct ContentView: View {
 
             Spacer()
 
+            Picker("連線", selection: $mirror.connectionPreference) {
+                ForEach(MirrorController.ConnectionPreference.allCases) { preference in
+                    Text(preference.label).tag(preference)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 155)
+
             if !mirror.devices.isEmpty {
                 Picker("裝置", selection: deviceSelection) {
                     ForEach(mirror.devices) { device in
@@ -125,7 +137,24 @@ struct ContentView: View {
                 .foregroundStyle(emptyStateSecondaryColor)
                 .frame(maxWidth: 330)
 
-            automaticLaunchNotice
+            if let code = mirror.airPlayVerificationCode {
+                VStack(spacing: 6) {
+                    Text("AirPlay 驗證碼")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(emptyStateSecondaryColor)
+                    Text(code)
+                        .font(.system(size: 52, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .tracking(8)
+                        .foregroundStyle(mirror.presentationMode ? Color.white : Color.primary)
+                        .accessibilityLabel("AirPlay 驗證碼 \(code)")
+                }
+                .padding(.vertical, 8)
+            }
+
+            if mirror.airPlayVerificationCode == nil {
+                automaticLaunchNotice
+            }
 
             if mirror.state == .permissionDenied {
                 Button("開啟相機權限設定") {
@@ -169,7 +198,7 @@ struct ContentView: View {
 
             Spacer()
 
-            Text("會議中分享「Mirra」視窗；裝置觸控不受影響")
+            Text("會議中分享「Mirra」視窗；USB 與 AirPlay 都不影響手機觸控")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -195,16 +224,15 @@ struct ContentView: View {
     }
 
     private var isShowingPreview: Bool {
-        if case .streaming = mirror.state {
-            return true
-        }
-        return false
+        mirror.isShowingUSBPreview || mirror.isShowingAirPlayPreview
     }
 
     private var stateSymbol: String {
         switch mirror.state {
         case .streaming:
-            return "cable.connector"
+            return mirror.activeSource == .airPlay
+                ? "airplayvideo"
+                : "cable.connector"
         case .failed, .permissionDenied:
             return "exclamationmark.triangle.fill"
         case .connecting, .requestingPermission: return "ellipsis.circle"
@@ -221,33 +249,42 @@ struct ContentView: View {
     }
 
     private var emptyStateSymbol: String {
+        if mirror.airPlayVerificationCode != nil {
+            return "lock.display"
+        }
         switch mirror.state {
         case .permissionDenied:
             return "lock.shield"
         default:
-            return "cable.connector"
+            return "rectangle.connected.to.line.below"
         }
     }
 
     private var emptyStateTitle: String {
+        if mirror.airPlayVerificationCode != nil {
+            return "在 iPhone 輸入驗證碼"
+        }
         switch mirror.state {
         case .permissionDenied:
             return "允許 Mirra 使用影像來源"
         case .failed:
             return "目前無法顯示 iPhone"
         default:
-            return "用 USB 連接 iPhone 或 iPad"
+            return "連接 iPhone 或 iPad"
         }
     }
 
     private var emptyStateMessage: String {
+        if mirror.airPlayVerificationCode != nil {
+            return "驗證成功後，這台裝置 30 天內重連不需再次輸入。"
+        }
         switch mirror.state {
         case .permissionDenied:
             return "macOS 把 iPhone 螢幕當成影像擷取裝置，因此 Mirra 第一次使用需要相機權限。"
         case .failed(let message):
             return "\(message)\n\n請解鎖 iPhone、點選「信任」，再重新掃描。"
         default:
-            return "請解鎖裝置，使用可傳輸資料的 USB 線連接這台 Mac，並在 iPhone／iPad 上點選「信任」。Mirra 會自動開始顯示。"
+            return "USB：使用資料線連接並點選「信任」。\n\n無線：確認在同一個 Wi-Fi，從控制中心 → 螢幕鏡像輸出，選擇「\(mirror.airPlayReceiver.receiverName)」。"
         }
     }
 

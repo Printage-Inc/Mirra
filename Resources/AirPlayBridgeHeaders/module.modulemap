@@ -1,0 +1,4 @@
+module AirPlayMacBridge {
+    header "AirPlayEngine.h"
+    export *
+}

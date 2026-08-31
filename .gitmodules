@@ -1,0 +1,12 @@
+[submodule "Vendor/UxPlay"]
+	path = Vendor/UxPlay
+	url = https://github.com/FDH2/UxPlay.git
+[submodule "Vendor/AirPlayMacBridge"]
+	path = Vendor/AirPlayMacBridge
+	url = https://github.com/airlive-project/airlive-bridge.git
+[submodule "Vendor/OpenSSL"]
+	path = Vendor/OpenSSL
+	url = https://github.com/openssl/openssl.git
+[submodule "Vendor/libplist"]
+	path = Vendor/libplist
+	url = https://github.com/libimobiledevice/libplist.git

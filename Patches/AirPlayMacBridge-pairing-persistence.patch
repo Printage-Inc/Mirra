@@ -1,0 +1,266 @@
+diff --git a/Sources/AirPlay/AirPlayEngine.mm b/Sources/AirPlay/AirPlayEngine.mm
+index 92e3894..4195747 100644
+--- a/Sources/AirPlay/AirPlayEngine.mm
++++ b/Sources/AirPlay/AirPlayEngine.mm
+@@ -41,14 +41,18 @@
+ #include <condition_variable>
+ #include <cstring>
+ #include <ctime>
++#include <fstream>
++#include <map>
+ #include <mutex>
+ #include <string>
+ #include <thread>
+ #include <vector>
+ 
++#include <fcntl.h>
+ #include <ifaddrs.h>
+ #include <net/if_dl.h>
+ #include <sys/socket.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ 
+ #include "H264DecoderVT.hpp"
+@@ -119,6 +123,38 @@ int parse_hw_addr(const std::string &str, std::vector<char> &hw_addr)
+   return 0;
+ }
+ 
++// Keep the receiver identity and paired-client allow-list outside the app
++// bundle, private to the current macOS account. This survives app updates.
++std::string mirra_airplay_storage_directory()
++{
++  @autoreleasepool
++  {
++    NSFileManager *manager = [NSFileManager defaultManager];
++    NSURL *base = [[manager URLsForDirectory:NSApplicationSupportDirectory
++                                   inDomains:NSUserDomainMask] firstObject];
++    if (!base)
++      return {};
++
++    NSURL *directory = [base URLByAppendingPathComponent:@"Mirra" isDirectory:YES];
++    NSError *error = nil;
++    NSDictionary *attributes = @{NSFilePosixPermissions: @(0700)};
++    if (![manager createDirectoryAtURL:directory
++           withIntermediateDirectories:YES
++                            attributes:attributes
++                                 error:&error])
++    {
++      os_log_error(ap_log(), "cannot create private AirPlay storage: %{public}@", error);
++      return {};
++    }
++
++    const char *path = directory.path.fileSystemRepresentation;
++    if (!path)
++      return {};
++    chmod(path, 0700);
++    return std::string(path);
++  }
++}
++
+ } // namespace
+ 
+ // ---------------------------------------------------------------------------
+@@ -130,7 +166,16 @@ int parse_hw_addr(const std::string &str, std::vector<char> &hw_addr)
+ public:
+   using FrameCallback = void (^)(CVPixelBufferRef, uint64_t);
+ 
+-  explicit AirPlayEngineImpl(std::string name) : serverName_(std::move(name)) {}
++  explicit AirPlayEngineImpl(std::string name) : serverName_(std::move(name))
++  {
++    storageDirectory_ = mirra_airplay_storage_directory();
++    if (!storageDirectory_.empty())
++    {
++      keyFile_ = storageDirectory_ + "/receiver-identity.pem";
++      registrationFile_ = storageDirectory_ + "/paired-clients.txt";
++    }
++    loadRegisteredClients();
++  }
+ 
+   ~AirPlayEngineImpl() { stop(); }
+ 
+@@ -166,6 +211,61 @@ void notifyVerificationCode(const char *pin)
+       cb([NSString stringWithUTF8String:pin]);
+   }
+ 
++  bool isClientRegistered(const char *publicKey)
++  {
++    if (!validClientPublicKey(publicKey))
++      return false;
++    std::lock_guard<std::mutex> lk(pairingMutex_);
++    const auto found = registeredClients_.find(publicKey);
++    if (found == registeredClients_.end())
++      return false;
++    if (found->second <= time(nullptr))
++    {
++      registeredClients_.erase(found);
++      os_log(ap_log(), "an AirPlay client registration expired");
++      return false;
++    }
++    return true;
++  }
++
++  void rememberClient(const char *publicKey)
++  {
++    if (!validClientPublicKey(publicKey))
++      return;
++
++    const time_t expiresAt = time(nullptr) + kPairingLifetimeSeconds;
++    std::lock_guard<std::mutex> lk(pairingMutex_);
++    registeredClients_[publicKey] = expiresAt;
++    if (registrationFile_.empty())
++      return;
++
++    const int fd = open(registrationFile_.c_str(),
++                        O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
++    if (fd < 0)
++    {
++      os_log_error(ap_log(), "cannot save paired AirPlay client");
++      return;
++    }
++    fchmod(fd, 0600);
++    std::string record(publicKey);
++    record += "," + std::to_string((long long)expiresAt) + "\n";
++    const char *cursor = record.data();
++    size_t remaining = record.size();
++    while (remaining > 0)
++    {
++      const ssize_t written = write(fd, cursor, remaining);
++      if (written <= 0)
++        break;
++      cursor += written;
++      remaining -= (size_t)written;
++    }
++    close(fd);
++    if (remaining == 0)
++      os_log(ap_log(), "remembered a verified AirPlay client for 30 days");
++    else
++      os_log_error(ap_log(), "could not completely save paired AirPlay client");
++  }
++
+   // Invoke the "connection lost" block (if any) OUTSIDE the lock — it hops to the Swift/main
+   // side, which must never run while we hold cbMutex_.  Fires on a UxPlay network thread.
+   void notifyConnectionLost()
+@@ -451,9 +551,15 @@ static void display_pin(void *cls, char *pin)
+   {
+     static_cast<AirPlayEngineImpl *>(cls)->notifyVerificationCode(pin);
+   }
+-  static bool check_register(void * /*cls*/, const char * /*pk_str*/) { return true; }
+-  static void register_client(void * /*cls*/, const char * /*device_id*/,
+-                              const char * /*pk_str*/, const char * /*name*/) {}
++  static bool check_register(void *cls, const char *pk_str)
++  {
++    return static_cast<AirPlayEngineImpl *>(cls)->isClientRegistered(pk_str);
++  }
++  static void register_client(void *cls, const char * /*device_id*/,
++                              const char *pk_str, const char * /*name*/)
++  {
++    static_cast<AirPlayEngineImpl *>(cls)->rememberClient(pk_str);
++  }
+ 
+   static void log_callback(void * /*cls*/, int level, const char *msg)
+   {
+@@ -467,6 +573,56 @@ static void log_callback(void * /*cls*/, int level, const char *msg)
+   }
+ 
+ private:
++  static constexpr time_t kPairingLifetimeSeconds = 30 * 24 * 60 * 60;
++
++  static bool validClientPublicKey(const char *publicKey)
++  {
++    if (!publicKey || strlen(publicKey) != 44)
++      return false;
++    for (size_t index = 0; index < 44; ++index)
++    {
++      const unsigned char c = (unsigned char)publicKey[index];
++      const bool base64 = (c >= 'A' && c <= 'Z') ||
++                          (c >= 'a' && c <= 'z') ||
++                          (c >= '0' && c <= '9') || c == '+' || c == '/';
++      const bool padding = c == '=' && index >= 42;
++      if (!base64 && !padding)
++        return false;
++    }
++    return true;
++  }
++
++  void loadRegisteredClients()
++  {
++    if (registrationFile_.empty())
++      return;
++    std::ifstream input(registrationFile_);
++    std::string line;
++    const time_t now = time(nullptr);
++    while (std::getline(input, line))
++    {
++      if (!line.empty() && line.back() == '\r')
++        line.pop_back();
++      const size_t comma = line.find(',');
++      if (comma != 44 || !validClientPublicKey(line.substr(0, comma).c_str()))
++        continue;
++      try
++      {
++        const time_t expiresAt = (time_t)std::stoll(line.substr(comma + 1));
++        if (expiresAt > now)
++          registeredClients_[line.substr(0, comma)] = expiresAt;
++      }
++      catch (...)
++      {
++        // Ignore malformed local state and require verification again.
++      }
++    }
++    if (!registeredClients_.empty())
++      os_log(ap_log(), "loaded %zu unexpired paired AirPlay client(s)",
++             registeredClients_.size());
++    chmod(registrationFile_.c_str(), 0600);
++  }
++
+   // ---- decoder thread ----
+ 
+   void decoderLoop()
+@@ -629,13 +785,30 @@ int startServerLocked(const std::string &name)
+ 
+     // 3) raop_init2 — mandatory in this fork (sets up pairing + httpd).
+     //    nohold = 1: let a new client take over from a stale connection.
+-    //    Empty keyfile → an ephemeral pairing key is generated in memory.
+-    if (raop_init2(raop_, /*nohold=*/1, mac.c_str(), /*keyfile=*/""))
++    //    A private persistent key keeps iOS pairing valid across app relaunches.
++    const char *keyFile = keyFile_.empty() ? "" : keyFile_.c_str();
++    if (raop_init2(raop_, /*nohold=*/1, mac.c_str(), keyFile))
+     {
+       os_log_error(ap_log(), "raop_init2 failed");
+       stopServerLocked();
+       return -3;
+     }
++    if (!keyFile_.empty() &&
++        (access(keyFile_.c_str(), F_OK) != 0 || chmod(keyFile_.c_str(), 0600) != 0))
++    {
++      os_log_error(ap_log(), "AirPlay receiver identity was not persisted securely");
++      stopServerLocked();
++      return -4;
++    }
++
++    // Enable UxPlay's registered-client check. Without this flag, iOS starts
++    // a brand-new PIN setup on every reconnect and failed retries can loop.
++    if (raop_set_plist(raop_, "pin", 0) != 0)
++    {
++      os_log_error(ap_log(), "could not enable AirPlay verification mode");
++      stopServerLocked();
++      return -5;
++    }
+ 
+     // 4) ports + httpd. 0-filled arrays = dynamic assignment.
+     unsigned short tcp[3] = {0, 0, 0};
+@@ -761,6 +929,14 @@ void stopServerLocked()
+   // without its reference frames) until an SPS/IDR restarts the chain.
+   std::atomic<bool> needIdr_{false};
+ 
++  // Pairing identity and expiring public-key allow-list. Verification codes,
++  // device names, and device identifiers are never persisted.
++  std::string storageDirectory_;
++  std::string keyFile_;
++  std::string registrationFile_;
++  std::map<std::string, time_t> registeredClients_;
++  std::mutex pairingMutex_;
++
+   // Restart worker.
+   std::thread restartWorker_;
+   std::mutex restartMutex_;

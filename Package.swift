@@ -12,14 +12,22 @@ let package = Package(
         .executable(name: "MirraDeviceWatcher", targets: ["CableMirrorDeviceWatcher"])
     ],
     targets: [
+        .binaryTarget(
+            name: "AirPlayMacBridge",
+            path: ".build/MirraAirPlay.xcframework"
+        ),
         .executableTarget(
             name: "CableMirror",
+            dependencies: ["AirPlayMacBridge"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreAudio"),
                 .linkedFramework("CoreMediaIO"),
-                .linkedFramework("ServiceManagement")
+                .linkedFramework("CoreVideo"),
+                .linkedFramework("VideoToolbox"),
+                .linkedFramework("ServiceManagement"),
+                .linkedLibrary("c++")
             ]
         ),
         .executableTarget(
@@ -33,5 +41,6 @@ let package = Package(
             name: "CableMirrorTests",
             dependencies: ["CableMirror"]
         )
-    ]
+    ],
+    cxxLanguageStandard: .cxx20
 )

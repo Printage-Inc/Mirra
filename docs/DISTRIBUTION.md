@@ -34,7 +34,7 @@ CODESIGN_IDENTITY="Developer ID Application: RELEASE_OWNER (TEAM_ID)" \
 ./scripts/notarize.sh /absolute/path/to/Mirra-VERSION-TIMESTAMP.dmg MirraNotary
 ```
 
-The build enables Hardened Runtime, signs the device watcher and app, signs the DMG, and creates a universal Intel/Apple-silicon binary. The notarization script uploads the DMG, waits for Apple, staples the ticket, and validates the final Gatekeeper result.
+The build enables Hardened Runtime, signs the device watcher and app, signs the DMG, and creates the current Apple-silicon release artifact. It also places `LICENSE.txt`, third-party notices, and the complete corresponding GPL source ZIP in the DMG. The notarization script uploads the DMG, waits for Apple, staples the ticket, and validates the final Gatekeeper result.
 
 ## Publish only after
 
@@ -43,3 +43,6 @@ The build enables Hardened Runtime, signs the device watcher and app, signs the 
 - `xcrun stapler validate Mirra.dmg` succeeds.
 - `spctl` accepts the DMG.
 - A clean Mac can drag Mirra to Applications, grant Camera access, approve the background item if requested, and display a trusted iPhone/iPad over USB.
+- The same clean Mac grants Local Network access, advertises `Mirra: <Mac name>`, requires the displayed four-digit code on first use, remembers that verified AirPlay public key for 30 days across app relaunches, and keeps the video inside Mirra.
+- The source ZIP in the DMG builds the same release from the pinned UxPlay, bridge, OpenSSL, and libplist revisions.
+- Any download page identifies Mirra as GPLv3 and provides the corresponding source alongside the binary.

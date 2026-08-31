@@ -18,11 +18,13 @@ STAGING_APP_DIR="${DIST_DIR}/staging/Mirra.app"
 DMG_ROOT="${DIST_DIR}/dmg-root"
 DMG_PATH="${PROJECT_DIR}/dist/${ARTIFACT_NAME}.dmg"
 STAGING_DMG_PATH="${DIST_DIR}/Mirra-staging.dmg"
+SOURCE_ARCHIVE_PATH="${DIST_DIR}/Mirra-${VERSION}-Source.zip"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 ENTITLEMENTS_PATH="${ENTITLEMENTS_FILE:-${PROJECT_DIR}/Resources/CableMirror.entitlements}"
 WATCHER_ENTITLEMENTS_PATH="${WATCHER_ENTITLEMENTS_FILE:-${PROJECT_DIR}/Resources/CableMirrorDeviceWatcher.entitlements}"
 ASSET_CATALOG_PATH="${PROJECT_DIR}/Resources/Assets.xcassets"
 ASSET_INFO_PATH="${DIST_DIR}/asset-catalog-info.plist"
+APP_ARCH="${APP_ARCH:-arm64}"
 
 mkdir -p \
     "${STAGING_APP_DIR}/Contents/MacOS" \
@@ -42,8 +44,9 @@ if [[ ! -f "${WATCHER_ENTITLEMENTS_PATH}" ]]; then
 fi
 
 cd "${PROJECT_DIR}"
-swift build --disable-sandbox -c release --arch arm64 --arch x86_64
-BIN_DIR="$(swift build --disable-sandbox -c release --arch arm64 --arch x86_64 --show-bin-path)"
+AIRPLAY_ARCH="${APP_ARCH}" "${PROJECT_DIR}/scripts/build-airplay-core.sh"
+swift build --disable-sandbox -c release --arch "${APP_ARCH}"
+BIN_DIR="$(swift build --disable-sandbox -c release --arch "${APP_ARCH}" --show-bin-path)"
 
 ditto "${BIN_DIR}/Mirra" "${STAGING_APP_DIR}/Contents/MacOS/Mirra"
 ditto "${BIN_DIR}/MirraDeviceWatcher" "${STAGING_APP_DIR}/Contents/MacOS/MirraDeviceWatcher"
@@ -113,6 +116,10 @@ codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
 
 ditto "${APP_DIR}" "${DMG_ROOT}/Mirra.app"
 codesign --verify --deep --strict --verbose=2 "${DMG_ROOT}/Mirra.app"
+"${PROJECT_DIR}/scripts/package-source.sh" "${SOURCE_ARCHIVE_PATH}"
+ditto "${SOURCE_ARCHIVE_PATH}" "${DMG_ROOT}/Mirra-${VERSION}-Source.zip"
+ditto "${PROJECT_DIR}/LICENSE" "${DMG_ROOT}/LICENSE.txt"
+ditto "${PROJECT_DIR}/THIRD-PARTY-NOTICES.md" "${DMG_ROOT}/THIRD-PARTY-NOTICES.md"
 ln -s /Applications "${DMG_ROOT}/Applications"
 ditto "${APP_DIR}/Contents/Resources/AppIcon.icns" "${DMG_ROOT}/.VolumeIcon.icns"
 xcrun SetFile -a C "${DMG_ROOT}"
@@ -146,6 +153,8 @@ spctl --assess --type execute --verbose=2 "${APP_DIR}" || true
 
 print "App: ${APP_DIR}"
 print "DMG: ${DMG_PATH}"
+print "Corresponding source: ${SOURCE_ARCHIVE_PATH}"
 print "Entitlements: ${ENTITLEMENTS_PATH}"
 print "Watcher entitlements: ${WATCHER_ENTITLEMENTS_PATH}"
 print "Signing identity: ${IDENTITY}"
+print "Architecture: ${APP_ARCH}"

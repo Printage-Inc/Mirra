@@ -1,0 +1,42 @@
+diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
+index 1aeba28..7b9585b 100644
+--- a/lib/raop_handlers.h
++++ b/lib/raop_handlers.h
+@@ -130,7 +130,8 @@ raop_handler_info(raop_conn_t *conn,
+     plist_dict_set_item(res_node, "pk", pk_node);
+     free(pk);
+ 
+-    uint64_t features = dnssd_get_airplay_features(raop->dnssd);
++    uint64_t features = ((uint64_t) 0x1E << 32) | 0x5A7FFFF7;
++    /* MIRRA: /info rotation mask; Bonjour TXT intentionally remains stock. */
+     plist_t features_node = plist_new_uint(features);
+     plist_dict_set_item(res_node, "features", features_node);
+ 
+diff --git a/lib/raop_rtp_mirror.c b/lib/raop_rtp_mirror.c
+index 2bb4f5f..a46796f 100644
+--- a/lib/raop_rtp_mirror.c
++++ b/lib/raop_rtp_mirror.c
+@@ -851,7 +851,8 @@ raop_rtp_mirror_thread(void *arg)
+     }
+ 
+     if (unsupported_codec) {
+-        CLOSESOCKET(raop_rtp_mirror->mirror_data_sock);
++        /* stop() owns this socket close. A pre-close here can close an fd that
++         * has already been reused by another connection. */
+         raop_rtp_mirror_stop(raop_rtp_mirror);
+         raop_rtp_mirror->callbacks.video_reset(raop_rtp_mirror->callbacks.cls, RESET_TYPE_RTP_SHUTDOWN);
+     }
+@@ -943,8 +944,11 @@ void raop_rtp_mirror_stop(raop_rtp_mirror_t *raop_rtp_mirror) {
+     raop_rtp_mirror->running = 0;
+     MUTEX_UNLOCK(raop_rtp_mirror->run_mutex);
+ 
+-    /* Join the thread */
+-    THREAD_JOIN(raop_rtp_mirror->thread_mirror);
++    /* The unsupported-codec path can call stop from the mirror thread itself.
++     * Never pthread_join(pthread_self()); the owner will reap it later. */
++    if (!pthread_equal(pthread_self(), raop_rtp_mirror->thread_mirror)) {
++        THREAD_JOIN(raop_rtp_mirror->thread_mirror);
++    }
+ 
+     if (raop_rtp_mirror->mirror_data_sock != -1) {
+         CLOSESOCKET(raop_rtp_mirror->mirror_data_sock);

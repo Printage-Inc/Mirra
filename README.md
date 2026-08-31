@@ -1,6 +1,6 @@
 # Mirra
 
-Mirra is a native macOS app that shows the live display of an iPhone or iPad over a USB data cable. It uses Apple's public AVFoundation and CoreMediaIO APIs and keeps all video local to the Mac.
+Mirra is a native macOS app that shows the live display of an iPhone or iPad over USB or AirPlay. USB uses Apple's AVFoundation and CoreMediaIO APIs. Wireless mode contains a pinned UxPlay receiver and decodes H.264 locally with VideoToolbox; Mirra does not send the screen to a cloud service.
 
 ## What works in this MVP
 
@@ -16,7 +16,9 @@ Mirra is a native macOS app that shows the live display of an iPhone or iPad ove
 - Keep the mirror window above other apps.
 - Enter a clean presentation mode with **Shift-Command-P**, then share the window named **Mirra** in Zoom, Google Meet, Teams, or another conferencing app.
 - Copy a privacy-safe JSON diagnostics report for physical-device certification.
-- Build a universal Intel + Apple silicon `.app` and `.dmg`.
+- Advertise `Mirra: <Mac name>` in the iPhone/iPad Screen Mirroring list and use AirPlay's native four-digit onscreen verification-code pairing.
+- Remember a successfully verified iPhone/iPad public key for 30 days, so unexpired devices reconnect without entering another code. Mirra never stores the verification code, device name, or device identifier.
+- Build a signed Apple-silicon `.app` and `.dmg` with the complete corresponding GPL source included.
 
 ## Important platform boundary
 
@@ -26,13 +28,20 @@ Mirra does not send Mac mouse or keyboard events to a physical iPhone. Apple doe
 
 Full Xcode is required. The scripts explicitly use the standard Xcode install even if `xcode-select` currently points at Command Line Tools.
 
+Install the source-build prerequisites once:
+
+```sh
+HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cmake autoconf automake libtool pkg-config
+git submodule update --init --recursive
+```
+
 ```sh
 cd /Users/vivi/code/NuStack/Mirra
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --disable-sandbox
 ./scripts/build-app.sh
 ```
 
-Every packaging run creates a timestamped artifact instead of overwriting an earlier build. The script prints the resulting `.app` and `.dmg` paths.
+Every packaging run creates a timestamped artifact instead of overwriting an earlier build. The script prints the resulting `.app`, `.dmg`, and corresponding-source archive paths. OpenSSL, libplist, UxPlay, and the VideoToolbox bridge are compiled from the pinned submodule revisions; Homebrew supplies build tools only.
 
 The default build is ad-hoc signed for local testing. For direct distribution, set a Developer ID identity:
 
@@ -51,7 +60,7 @@ To create that experimental package explicitly, set `ENTITLEMENTS_FILE` when inv
 ENTITLEMENTS_FILE="$PWD/Resources/CableMirror-AppStore.entitlements" ./scripts/build-app.sh
 ```
 
-## First-run test
+## First-run USB test
 
 1. Connect an unlocked iPhone with a data-capable cable.
 2. Approve **Trust This Computer** on the iPhone if prompted.
@@ -61,8 +70,18 @@ ENTITLEMENTS_FILE="$PWD/Resources/CableMirror-AppStore.entitlements" ./scripts/b
 6. If no device appears, verify it first appears under QuickTime Player → File → New Movie Recording → Camera.
 7. Use **Copy Diagnostics** and add the result to the release test record.
 
-## Connection scope
+## First-run wireless test
 
-Mirra 1.0 is intentionally USB-only. It does not request Screen Recording, Local Network, Bluetooth, or Bonjour access. Apple's public APIs do not expose a dependable way for a third-party Mac app to receive the system AirPlay display and embed that protected receiver surface inside its own window without a companion app on the iPhone or iPad.
+1. Open an installed, Developer-ID-signed copy of Mirra and allow **Local Network** access if macOS asks.
+2. Put the Mac and iPhone/iPad on the same local network. Bluetooth is not required by Mirra's AirPlay receiver.
+3. On the iPhone/iPad, open Control Center → **Screen Mirroring** and select `Mirra: <Mac name>`.
+4. On first connection, enter the fresh four-digit code shown in the Mirra window. Mirra remembers that verified AirPlay public key for 30 days; after expiry, it asks for a new code.
+5. The mirrored display remains inside Mirra, so other Mac windows and conference-app sharing are unaffected.
+
+Wireless reception is implemented by the GPLv3 UxPlay stack rather than Apple's system AirPlay Receiver window. Some managed, guest, VPN, or client-isolated Wi-Fi networks block Bonjour discovery or peer-to-peer traffic; USB remains the most predictable fallback.
+
+## License
+
+Mirra is free software licensed under [GNU GPL version 3](LICENSE). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for pinned dependencies and their licenses. Every distributed DMG includes a source ZIP containing Mirra, the local patches, build scripts, and the exact third-party source used for that binary.
 
 See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the physical-device release matrix.
