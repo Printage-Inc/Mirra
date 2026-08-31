@@ -88,12 +88,12 @@ final class AirPlayFrameRenderer {
         )
         guard status == noErr, let sampleBuffer else { return }
 
-        CMSetAttachment(
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(
             sampleBuffer,
-            key: kCMSampleAttachmentKey_DisplayImmediately,
-            value: kCFBooleanTrue,
-            attachmentMode: kCMAttachmentMode_ShouldPropagate
-        )
+            createIfNecessary: true
+        ) as? [NSMutableDictionary], let sampleAttachments = attachments.first {
+            sampleAttachments[kCMSampleAttachmentKey_DisplayImmediately] = kCFBooleanTrue
+        }
         if layer.status == .failed {
             layer.flush()
         }
