@@ -31,7 +31,7 @@ Full Xcode is required. The scripts explicitly use the standard Xcode install ev
 Install the source-build prerequisites once:
 
 ```sh
-HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cmake autoconf automake libtool pkg-config
+HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cmake autoconf automake libtool pkg-config ripgrep
 git submodule update --init --recursive
 ```
 
